@@ -1,0 +1,46 @@
+Tahap 2 selesai di marsa-lab-android-tahap2.zip (versi 0.2.0). Kode ini belum saya kompilasi, karena di sini tidak ada Android SDK. Yang saya cek hanya keseimbangan kurung, jadi jalankan workflow GitHub Actions atau Sync di Android Studio untuk memastikan.
+
+Cara pakainya (peran controller):
+
+Tekan lama kartu PC online untuk memilih. Setelah ada yang terpilih, ketuk kartu lain untuk menambah atau mencabut pilihan.
+Bilah bawah muncul dengan aksi Pengumuman, Kunci layar, Buka kunci, Buka URL, Restart, dan Matikan. Ada juga tombol "Semua online" dan "Batal".
+Pengumuman dan Buka URL punya kolom isian. Pengumuman dibatasi 500 karakter, dan URL harus http/https.
+Semua aksi lewat dialog konfirmasi. Restart dan Matikan diberi peringatan bahwa pekerjaan yang belum disimpan bisa hilang.
+Pilihan otomatis dibersihkan kalau PC jadi offline, dan tombol kembali membatalkan pilihan dulu sebelum keluar dari lab.
+Hasil perintah muncul sebagai snackbar. Sesi habis (401) tetap membawa ke login. Peran viewer tidak melihat pilihan atau aksi sama sekali.
+
+Satu hal yang perlu Anda cek: di zip tahap 1 tidak ada kode server, jadi kontrak perintahnya saya asumsikan sendiri. Aplikasi mengirim POST /l/{lab}/api/command dengan isi {type, clientIds, text?, url?}. Nilai type yang dipakai: message, lock, unlock, openurl, restart, shutdown. Kalau server guru memakai jalur atau nama berbeda, ubah COMMAND_PATH di GatewayApi.kt dan PcCommand.wire di Models.kt. Beri tahu saya bentuk sebenarnya kalau mau saya sesuaikan.
+
+Di tahap 1 ada bug kompilasi: trimEnd(/) di GatewayApi.kt dan AppViewModel.kt. Saya ganti jadi trimEnd('/').
+
+Perubahan lain: ControlBar.kt baru berisi bilah aksi dan dialog, MonitorScreen.kt disambungkan ke keduanya, dan README diperbarui. Tahap 3 (layar penuh dengan sentuh, scroll, dan keyboard) belum disentuh.
+
+Marsa lab android tahap2
+ZIP
+
+using System.Buffers.Binary; using System.Collections.Concurrent; using System.Net.WebSockets; using System.Security.Cryptography; using System.Text; using System.Text.Json; using System.Text.RegularExpressions; // ===== Perintah bantu ===== // MarsaLab.Gateway newkey -> membuat
+
+DITEMPEL
+
+untuk memastikan saya tempel program.cs yg di gateway server, setelah dicocokan apkah kode android sudah sesuai
+
+Setelah saya cocokkan dengan Program.cs, ada satu ketidakcocokan. Saya perbaiki dulu.
+
+Kode Android sudah cocok dengan gateway, kecuali satu hal yang sekarang saya perbaiki. Yang belum bisa saya pastikan adalah isi perintah, karena itu ditentukan server guru, bukan gateway.
+
+Yang salah dan sudah diperbaiki: gateway hanya meneruskan jalur dalam daftar putih (Classify), dan perintah ke PC hanya lewat POST /api/commands (jamak). Tahap 2 saya awalnya memakai /api/command, yang akan dijawab 404 "Tidak tersedia lewat jarak jauh." Sekarang COMMAND_PATH di GatewayApi.kt bernilai commands, dan zip tahap 2 sudah dibangun ulang dengan perbaikan itu.
+
+Yang sudah cocok:
+
+Login memakai {username, password} dan membalas {token, role, user, hours}, sama dengan LoginResponse.
+Header X-Marsa-Token dipakai di semua permintaan, dan daftar lab [{id, name, online}] cocok dengan LabDto.
+Peran controller dan viewer cocok dengan canControl. Pesan error berbentuk {error} dan kode 401, 403, 429, 503, dan 504 sudah ditangani. Batas baca 30 detik lebih panjang dari batas tunggu gateway 25 detik.
+GET clients dan screens, serta POST watch, ada di daftar putih sebagai "view".
+Peran viewer yang mengirim perintah ditolak gateway dengan 403, dan di aplikasi aksinya memang tidak muncul.
+
+Yang belum bisa dipastikan: gateway hanya meneruskan isi permintaan apa adanya, jadi bentuk body perintah ditentukan server guru. Saat ini aplikasi mengirim {type, clientIds, text?, url?} dengan type berupa message, lock, unlock, openurl, restart, atau shutdown. Itu tebakan saya. Kalau server guru memakai nama atau struktur lain (misalnya command, args, atau clientIds bernama lain), PC tidak akan menjalankannya. Tempel handler atau DTO /api/commands dari server guru, nanti saya sesuaikan PcCommand.wire dan body-nya.
+
+Dua catatan untuk tahap berikutnya:
+
+Jalur /api/commands/recent ada di daftar putih, jadi tahap 2 bisa dilengkapi riwayat perintah dan statusnya kalau Anda mau.
+Tahap 3 (sentuh, scroll, keyboard) harus lewat POST /api/control/{aksi} dengan satu segmen aksi, karena gateway menolak jalur yang lebih dalam. Itu juga perlu kontrak dari server guru.
