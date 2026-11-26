@@ -60,7 +60,7 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont 
  *  - /l/{lab}/api/...  (diteruskan gateway ke server guru di lab)
  */
 class GatewayApi(baseUrl: String, private val token: String? = null) {
-    private val base = baseUrl.trimEnd(/)
+    private val base = baseUrl.trimEnd('/')
 
     private fun request(path: String): Request.Builder =
         Request.Builder().url(base + path).apply {
