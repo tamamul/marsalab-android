@@ -2,9 +2,7 @@ package com.marsa.lab.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,8 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -41,7 +37,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -58,29 +53,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.marsa.lab.data.ClientDto
 import com.marsa.lab.data.LabDto
-import com.marsa.lab.data.PcCommand
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MonitorScreen(vm: AppViewModel, lab: LabDto) {
     val ui by vm.monitor.collectAsStateWithLifecycle()
-    val ctl by vm.control.collectAsStateWithLifecycle()
-    val session by vm.session.collectAsStateWithLifecycle()
-    val canControl = session?.canControl == true
-    val snackbar = remember { SnackbarHostState() }
-    var dialog by remember { mutableStateOf<PcCommand?>(null) }
     val owner = LocalLifecycleOwner.current
     var filter by rememberSaveable { mutableIntStateOf(0) } // 0 semua, 1 online, 2 offline
 
-    // Tombol kembali: batalkan pilihan dulu, baru keluar dari lab.
-    BackHandler { if (ctl.selected.isNotEmpty()) vm.clearSelection() else vm.backToLabs() }
-
-    LaunchedEffect(ctl.notice) {
-        ctl.notice?.let {
-            snackbar.showSnackbar(it)
-            vm.consumeNotice()
-        }
-    }
+    BackHandler { vm.backToLabs() }
 
     // Polling hanya berjalan saat layar terlihat; berhenti otomatis di latar belakang.
     LaunchedEffect(lab.id) {
@@ -99,19 +80,6 @@ fun MonitorScreen(vm: AppViewModel, lab: LabDto) {
 
     Scaffold(
         containerColor = MarsaColors.Bg,
-        snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            if (canControl && ctl.selected.isNotEmpty()) {
-                ControlBar(
-                    count = ctl.selected.size,
-                    onlineTotal = onlineCount,
-                    busy = ctl.busy,
-                    onSelectAll = { vm.selectAllOnline() },
-                    onClear = { vm.clearSelection() },
-                    onPick = { dialog = it },
-                )
-            }
-        },
         topBar = {
             TopAppBar(
                 title = {
@@ -188,13 +156,6 @@ fun MonitorScreen(vm: AppViewModel, lab: LabDto) {
                         }
                         Switch(checked = ui.showThumbs, onCheckedChange = { vm.setShowThumbs(it) })
                     }
-                    if (canControl && ctl.selected.isEmpty() && onlineCount > 0) {
-                        Text(
-                            "Tekan lama kartu PC untuk memilih dan mengirim perintah.",
-                            color = MarsaColors.Muted,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
                 }
             }
 
@@ -216,46 +177,19 @@ fun MonitorScreen(vm: AppViewModel, lab: LabDto) {
             }
 
             items(shown, key = { it.clientId }) { pc ->
-                val picked = pc.clientId in ctl.selected
-                PcCard(
-                    pc = pc,
-                    thumb = ui.thumbs[pc.clientId],
-                    showThumbs = ui.showThumbs,
-                    selected = picked,
-                    onClick = { if (canControl && ctl.selected.isNotEmpty() && pc.isOnline) vm.toggleSelect(pc.clientId) },
-                    onLongClick = { if (canControl && pc.isOnline) vm.toggleSelect(pc.clientId) },
-                )
+                PcCard(pc, ui.thumbs[pc.clientId], ui.showThumbs) { vm.openRemote(pc) }
             }
         }
     }
-
-    dialog?.let { cmd ->
-        CommandDialog(
-            cmd = cmd,
-            count = ctl.selected.size,
-            onDismiss = { dialog = null },
-            onSend = { input ->
-                dialog = null
-                vm.sendCommand(cmd, input)
-            },
-        )
-    }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PcCard(
-    pc: ClientDto,
-    thumb: Thumb?,
-    showThumbs: Boolean,
-    selected: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-) {
+private fun PcCard(pc: ClientDto, thumb: Thumb?, showThumbs: Boolean, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
-        colors = CardDefaults.cardColors(containerColor = if (selected) MarsaColors.CardAlt else MarsaColors.Card),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MarsaColors.Cyan else MarsaColors.Outline),
+        onClick = onClick,
+        enabled = pc.isOnline,
+        colors = CardDefaults.cardColors(containerColor = MarsaColors.Card, disabledContainerColor = MarsaColors.Card),
+        border = BorderStroke(1.dp, MarsaColors.Outline),
     ) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(MarsaColors.Bg),
@@ -285,7 +219,7 @@ private fun PcCard(
                 StatusDot(pc.isOnline)
                 RowGap(8)
                 Text(
-                    (if (selected) "✓ " else "") + pc.computerName,
+                    pc.computerName,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
