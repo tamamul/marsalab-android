@@ -2,6 +2,7 @@ package com.marsa.lab.ui
 
 import android.app.Application
 import android.graphics.BitmapFactory
+import android.os.SystemClock
 import android.util.Base64
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -10,14 +11,16 @@ import androidx.lifecycle.viewModelScope
 import com.marsa.lab.data.ApiException
 import com.marsa.lab.data.ClientDto
 import com.marsa.lab.data.GatewayApi
+import com.marsa.lab.data.InputEv
 import com.marsa.lab.data.LabDto
-import com.marsa.lab.data.PcCommand
 import com.marsa.lab.data.Session
 import com.marsa.lab.data.SessionStore
 import com.marsa.lab.data.ShotDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,12 +44,6 @@ data class LabsUi(
     val error: String? = null,
 )
 
-data class ControlUi(
-    val selected: Set<String> = emptySet(),
-    val busy: Boolean = false,
-    val notice: String? = null,
-)
-
 class Thumb(val image: ImageBitmap, val t: String)
 
 data class MonitorUi(
@@ -56,6 +53,16 @@ data class MonitorUi(
     val error: String? = null,
     val showThumbs: Boolean = true,
     val updatedAtMillis: Long = 0L,
+)
+
+data class RemoteUi(
+    val pc: ClientDto,
+    val frame: ImageBitmap? = null,
+    val frameT: String = "",
+    val frameReceivedAt: Long = 0L,
+    val error: String? = null,
+    val control: Boolean = false,
+    val controlError: String? = null,
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -77,9 +84,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _monitor = MutableStateFlow(MonitorUi(showThumbs = store.showThumbs))
     val monitor: StateFlow<MonitorUi> = _monitor.asStateFlow()
-
-    private val _control = MutableStateFlow(ControlUi())
-    val control: StateFlow<ControlUi> = _control.asStateFlow()
 
     private val kick = Channel<Unit>(Channel.CONFLATED)
 
@@ -132,7 +136,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _selectedLab.value = null
         _labs.value = LabsUi()
         _monitor.value = MonitorUi(showThumbs = store.showThumbs)
-        _control.value = ControlUi()
+        _remote.value = null
+        inputBuf.clear()
         _login.update { it.copy(busy = false, error = message) }
     }
 
@@ -153,13 +158,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectLab(lab: LabDto) {
-        _control.value = ControlUi()
         _monitor.value = MonitorUi(showThumbs = store.showThumbs)
         _selectedLab.value = lab
     }
 
     fun backToLabs() {
-        _control.value = ControlUi()
         _selectedLab.value = null
         _monitor.value = MonitorUi(showThumbs = store.showThumbs)
         loadLabs()
@@ -193,7 +196,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 it.copy(pcs = list, loading = false, error = null, updatedAtMillis = System.currentTimeMillis())
             }
             val onlineIds = list.filter { it.isOnline }.map { it.clientId }
-            _control.update { c -> c.copy(selected = c.selected.filter { it in onlineIds }.toSet()) }
             if (_monitor.value.showThumbs && onlineIds.isNotEmpty()) {
                 api.watch(lab.id, "thumb", WATCH_SECONDS, onlineIds.take(200))
                 updateThumbs(api.screens(lab.id))
@@ -222,61 +224,110 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _monitor.update { if (it.showThumbs) it.copy(thumbs = next) else it }
     }
 
-    // ===================== Kontrol PC (tahap 2) =====================
-    fun toggleSelect(id: String) {
-        if (_session.value?.canControl != true) return
-        _control.update { c ->
-            c.copy(selected = if (id in c.selected) c.selected - id else c.selected + id)
+    // ===================== Layar penuh & kontrol jarak jauh =====================
+    private val _remote = MutableStateFlow<RemoteUi?>(null)
+    val remote: StateFlow<RemoteUi?> = _remote.asStateFlow()
+
+    private val inputBuf = ArrayDeque<InputEv>()
+
+    fun openRemote(pc: ClientDto) {
+        inputBuf.clear()
+        _remote.value = RemoteUi(pc = pc)
+    }
+
+    fun closeRemote() {
+        inputBuf.clear()
+        _remote.value = null
+    }
+
+    /** Kontrol hanya boleh dinyalakan oleh peran controller. */
+    fun setControl(on: Boolean) {
+        if (on && _session.value?.canControl != true) return
+        if (!on) inputBuf.clear()
+        _remote.update { it?.copy(control = on, controlError = null) }
+    }
+
+    fun sendInput(ev: InputEv) {
+        if (_remote.value?.control != true) return
+        // gabungkan gerakan beruntun agar antrean tidak menumpuk
+        if (ev.t == "move" && inputBuf.lastOrNull()?.t == "move") inputBuf.removeLast()
+        if (inputBuf.size >= 300) inputBuf.removeFirst()
+        inputBuf.addLast(ev)
+    }
+
+    /**
+     * Dipanggil dari UI selama layar kontrol terlihat. Saat berhenti (aplikasi ke latar belakang
+     * atau layar ditutup) kontrol otomatis dimatikan.
+     */
+    suspend fun remoteLoop() {
+        val lab = _selectedLab.value ?: return
+        val id = _remote.value?.pc?.clientId ?: return
+        try {
+            coroutineScope {
+                launch { frameLoop(lab, id) }
+                launch { flushLoop(lab, id) }
+            }
+        } finally {
+            inputBuf.clear()
+            _remote.update { it?.copy(control = false) }
         }
     }
 
-    fun selectAllOnline() {
-        if (_session.value?.canControl != true) return
-        val ids = _monitor.value.pcs.filter { it.isOnline }.map { it.clientId }.toSet()
-        _control.update { it.copy(selected = ids) }
-    }
-
-    fun clearSelection() = _control.update { it.copy(selected = emptySet()) }
-
-    fun consumeNotice() = _control.update { it.copy(notice = null) }
-
-    private fun notice(msg: String) = _control.update { it.copy(notice = msg) }
-
-    /** [input]: isi pengumuman (MESSAGE) atau alamat web (OPEN_URL); diabaikan untuk perintah lain. */
-    fun sendCommand(type: PcCommand, input: String? = null) {
-        val s = _session.value ?: return
-        val lab = _selectedLab.value ?: return
-        if (!s.canControl) return notice("Peran Anda tidak diizinkan mengirim perintah.")
-        val c = _control.value
-        if (c.busy) return
-        val ids = c.selected.toList()
-        if (ids.isEmpty()) return notice("Pilih minimal satu PC online.")
-
-        val text: String? = if (type == PcCommand.MESSAGE) input?.trim()?.take(MAX_MESSAGE) else null
-        if (type == PcCommand.MESSAGE && text.isNullOrEmpty()) return notice("Isi pengumuman tidak boleh kosong.")
-        val url: String? = if (type == PcCommand.OPEN_URL) normalizeWebUrl(input.orEmpty()) else null
-        if (type == PcCommand.OPEN_URL && url == null) return notice("Alamat web tidak valid. Gunakan http:// atau https://.")
-
-        _control.update { it.copy(busy = true) }
-        viewModelScope.launch {
+    private suspend fun frameLoop(lab: LabDto, id: String) {
+        var lastWatch = 0L
+        while (true) {
+            var gotNew = false
+            var failed = false
+            val api = api() ?: return
             try {
-                val r = GatewayApi(s.baseUrl, s.token).command(lab.id, type, ids, text, url)
-                _control.value = ControlUi(notice = "${type.label}: terkirim ke ${r.sent} PC.")
-                refreshNow()
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastWatch >= WATCH_REFRESH_MS) {
+                    api.watch(lab.id, "full", 15, listOf(id))
+                    lastWatch = now
+                }
+                val shot = api.screen(lab.id, id)
+                // frame kecil (thumb) dari mode sebelumnya diabaikan sampai frame penuh tiba
+                if (shot.mode == "full" && shot.t != _remote.value?.frameT) {
+                    val img = withContext(Dispatchers.Default) { decode(shot.jpg) }
+                    if (img != null) {
+                        _remote.update {
+                            it?.copy(frame = img, frameT = shot.t, frameReceivedAt = SystemClock.elapsedRealtime(), error = null)
+                        }
+                        gotNew = true
+                    }
+                }
+                if (_remote.value?.error != null) _remote.update { it?.copy(error = null) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                if (isUnauthorized(e)) return@launch expireSession()
-                _control.update { it.copy(busy = false, notice = messageOf(e)) }
+                if (isUnauthorized(e)) return expireSession()
+                if (e is ApiException && e.status == 404 && e.message == "HTTP 404") {
+                    // belum ada gambar dari PC; tunggu saja
+                } else {
+                    failed = true
+                    _remote.update { it?.copy(error = messageOf(e)) }
+                }
             }
+            delay(if (failed) 1_500L else if (gotNew) 450L else 250L)
         }
     }
 
-    private fun normalizeWebUrl(input: String): String? {
-        var s = input.trim()
-        if (s.isEmpty()) return null
-        if (!s.contains("://")) s = "https://$s"
-        val ok = s.startsWith("https://", ignoreCase = true) || s.startsWith("http://", ignoreCase = true)
-        return if (ok && s.toHttpUrlOrNull() != null) s else null
+    private suspend fun flushLoop(lab: LabDto, id: String) {
+        while (true) {
+            delay(FLUSH_MS)
+            if (inputBuf.isEmpty()) continue
+            val api = api() ?: return
+            val batch = ArrayList<InputEv>()
+            while (batch.size < 60 && inputBuf.isNotEmpty()) batch.add(inputBuf.removeFirst())
+            try {
+                api.control(lab.id, id, batch)
+                if (_remote.value?.controlError != null) _remote.update { it?.copy(controlError = null) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (isUnauthorized(e)) return expireSession()
+                val msg = if (e is ApiException && e.status == 429) "antrean penuh, tunggu sebentar" else messageOf(e)
+                _remote.update { it?.copy(controlError = "Kontrol gagal: $msg") }
+            }
+        }
     }
 
     // ===================== Bantu =====================
@@ -296,7 +347,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (s.isEmpty()) return null
         if (!s.contains("://")) s = "https://$s"
         if (!s.startsWith("https://", ignoreCase = true)) return null
-        s = s.trimEnd('/')
+        s = s.trimEnd(/)
         return if (s.toHttpUrlOrNull() != null) s else null
     }
 
@@ -311,6 +362,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         const val DEFAULT_SERVER = "https://relay.marsa9.com"
         const val POLL_MS = 5_000L
         const val WATCH_SECONDS = 20
-        const val MAX_MESSAGE = 500
+        const val WATCH_REFRESH_MS = 4_000L
+        const val FLUSH_MS = 120L
     }
 }
