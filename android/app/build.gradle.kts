@@ -1,3 +1,9 @@
+val hasReleaseSigning = listOf(
+    "KEYSTORE_FILE",
+    "KEYSTORE_PASSWORD",
+    "KEY_ALIAS",
+    "KEY_PASSWORD"
+).all { !System.getenv(it).isNullOrBlank() }
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -16,12 +22,24 @@ android {
         versionCode = 2
         versionName = "0.3.0"
     }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-        }
+signingConfigs {
+    create("release") {
+        storeFile = file(System.getenv("KEYSTORE_FILE") ?: "marsa-lab-release.jks")
+        storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+        keyAlias = System.getenv("KEY_ALIAS") ?: ""
+        keyPassword = System.getenv("KEY_PASSWORD") ?: ""
     }
+}
+    
+    
+buildTypes {
+    release {
+        if (hasReleaseSigning) {
+            signingConfig = signingConfigs.getByName("release")
+        }
+        isMinifyEnabled = false
+    }
+}
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
