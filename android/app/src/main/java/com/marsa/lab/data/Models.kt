@@ -37,18 +37,18 @@ data class ShotDto(
     val jpg: String,
 )
 
-/** Perintah ke PC lab (tahap 2). `wire` = nilai yang dikirim ke server. */
-enum class PcCommand(val wire: String, val label: String, val destructive: Boolean = false) {
-    MESSAGE("message", "Pengumuman"),
-    LOCK("lock", "Kunci layar"),
-    UNLOCK("unlock", "Buka kunci"),
-    OPEN_URL("openurl", "Buka URL"),
-    RESTART("restart", "Restart", destructive = true),
-    SHUTDOWN("shutdown", "Matikan", destructive = true),
-}
-
+/** Event input untuk kontrol jarak jauh. Koordinat x,y dinormalisasi 0..1 terhadap layar PC. */
 @Serializable
-data class CommandResult(val sent: Int = 0)
+data class InputEv(
+    val t: String,
+    val x: Double = 0.0,
+    val y: Double = 0.0,
+    val b: String? = null,
+    val vk: Int = 0,
+    val s: String? = null,
+    val mods: List<String>? = null,
+    val d: Int = 0,
+)
 
 @Serializable
 data class ErrorDto(val error: String? = null)
