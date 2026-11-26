@@ -4,6 +4,7 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -33,6 +34,7 @@ object Http {
         .build()
 
     val json = Json { ignoreUnknownKeys = true }
+    val jsonOut = Json { encodeDefaults = true }
 }
 
 class ApiException(message: String, val status: Int = 0) : Exception(message)
@@ -58,7 +60,7 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont 
  *  - /l/{lab}/api/...  (diteruskan gateway ke server guru di lab)
  */
 class GatewayApi(baseUrl: String, private val token: String? = null) {
-    private val base = baseUrl.trimEnd('/')
+    private val base = baseUrl.trimEnd(/)
 
     private fun request(path: String): Request.Builder =
         Request.Builder().url(base + path).apply {
@@ -137,30 +139,15 @@ class GatewayApi(baseUrl: String, private val token: String? = null) {
     suspend fun screens(lab: String): Map<String, ShotDto> =
         Http.json.decodeFromString(exec(request(labPath(lab, "screens")).build()))
 
-    /** Kirim perintah ke PC terpilih. Hanya peran controller; server menolak dengan 403 bila bukan. */
-    suspend fun command(
-        lab: String,
-        type: PcCommand,
-        clientIds: List<String>,
-        text: String? = null,
-        url: String? = null,
-    ): CommandResult {
-        val body = buildJsonObject {
-            put("type", type.wire)
-            put("clientIds", JsonArray(clientIds.map { JsonPrimitive(it) }))
-            if (text != null) put("text", text)
-            if (url != null) put("url", url)
-        }.toString().toRequestBody(JSON_TYPE)
-        val resp = exec(request(labPath(lab, COMMAND_PATH)).post(body).build())
-        return try {
-            Http.json.decodeFromString<CommandResult>(resp)
-        } catch (ignored: Exception) {
-            CommandResult(sent = clientIds.size) // server tidak mengirim ringkasan; anggap terkirim
-        }
-    }
+    /** Gambar layar terbaru satu PC. Status 404 berarti belum ada gambar. */
+    suspend fun screen(lab: String, clientId: String): ShotDto =
+        Http.json.decodeFromString(exec(request(labPath(lab, "screens/" + Uri.encode(clientId))).build()))
 
-    private companion object {
-        /** Jalur perintah di server guru (setelah /l/{lab}/api/). Sesuaikan bila kontrak server berbeda. */
-        const val COMMAND_PATH = "commands"
+    /** Kirim event input ke PC (maks 60 per permintaan). Hanya untuk peran controller. */
+    suspend fun control(lab: String, clientId: String, events: List<InputEv>) {
+        val body = Http.jsonOut
+            .encodeToString(ListSerializer(InputEv.serializer()), events)
+            .toRequestBody(JSON_TYPE)
+        exec(request(labPath(lab, "control/" + Uri.encode(clientId))).post(body).build())
     }
 }
