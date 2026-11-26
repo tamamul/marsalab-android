@@ -1,4 +1,5 @@
-name: Build MARSA-Lab Android
+
+name: Build MARSA-Lab Android Release
 
 on:
   workflow_dispatch:
@@ -15,6 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: android
@@ -34,11 +36,13 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Build APK debug
-        run: gradle assembleDebug --no-daemon
+      - name: Build APK Release
+        run: gradle assembleRelease --no-daemon
 
-      - name: Unggah APK
+      - name: Unggah APK Release
         uses: actions/upload-artifact@v4
         with:
-          name: MarsaLab-Android-debug
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: MarsaLab-Android-Release
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
