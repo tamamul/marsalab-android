@@ -347,7 +347,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (s.isEmpty()) return null
         if (!s.contains("://")) s = "https://$s"
         if (!s.startsWith("https://", ignoreCase = true)) return null
-        s = s.trimEnd(/)
+        s = s.trimEnd('/')
         return if (s.toHttpUrlOrNull() != null) s else null
     }
 
